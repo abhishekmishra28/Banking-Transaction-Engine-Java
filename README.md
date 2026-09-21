@@ -60,6 +60,81 @@ This project serves as a comprehensive showcase of high-performance Java backend
 └──────────────────────────────────────────────────────────────────────────────────┘
 ```
 
+### 🔄 End-to-End Transaction Flowchart
+
+```mermaid
+flowchart TD
+    subgraph Client ["Client Layer"]
+        User(["👤 TCP Client (Telnet / Netcat)"])
+    end
+
+    subgraph Network ["Network & Presentation Layer"]
+        Server["BankingServer (:9090)"]
+        Handler["ClientConnectionHandler"]
+        Parser["CommandParser (Protocol Wire)"]
+    end
+
+    subgraph Concurrency ["Concurrency Layer"]
+        Queue[("Bounded Task Queue")]
+        Engine["TransactionEngine (Worker Threads)"]
+    end
+
+    subgraph Application ["Application Layer"]
+        TxService["TransactionService"]
+        LockMgr{"Deterministic Lock Ordering<br/>min(ID1, ID2) → max(ID1, ID2)"}
+        Fraud["FraudDetectionService<br/>(Velocity & Heuristics)"]
+        Audit["AuditService"]
+    end
+
+    subgraph Domain ["Domain Model Layer"]
+        SrcAcc["Source Account<br/>(debitInternal)"]
+        DstAcc["Destination Account<br/>(creditInternal)"]
+        CheckFunds{"Sufficient Funds<br/>& Overdraft Check?"}
+        Rollback["Atomic Rollback<br/>(Reverse Debit)"]
+    end
+
+    subgraph Persistence ["Persistence Layer (SQLite WAL)"]
+        AccRepo[("AccountRepository")]
+        TxRepo[("TransactionRepository")]
+        AuditRepo[("AuditLogRepository")]
+        DB[("SQLite Database<br/>PRAGMA journal_mode=WAL")]
+    end
+
+    User -->|"TCP Command (e.g. TRANSFER A B 500)"| Server
+    Server -->|"Accept Socket"| Handler
+    Handler -->|"Read Line"| Parser
+    Parser -->|"Submit Callable"| Queue
+    Queue --> Engine
+    Engine -->|"Execute Task"| TxService
+
+    TxService -->|"1. Evaluate Risk"| Fraud
+    Fraud -->|"Risk: LOW"| LockMgr
+    
+    LockMgr -->|"2. Acquire 1st Lock"| SrcAcc
+    LockMgr -->|"3. Acquire 2nd Lock"| DstAcc
+
+    SrcAcc --> CheckFunds
+    CheckFunds -- Insufficient --> Rollback
+    CheckFunds -- OK -->|"4. Atomic Debit"| SrcAcc
+    SrcAcc -->|"5. Atomic Credit"| DstAcc
+    DstAcc -.->|"On Failure"| Rollback
+
+    DstAcc -->|"6. Update Balances"| AccRepo
+    TxService -->|"7. Save Transaction"| TxRepo
+    TxService -->|"8. Write Audit Log"| Audit
+    Audit --> AuditRepo
+
+    AccRepo --> DB
+    TxRepo --> DB
+    AuditRepo --> DB
+
+    Rollback -->|"Release Locks"| TxService
+    DB -->|"Release Locks"| TxService
+    TxService -->|"Return Status"| Parser
+    Parser -->|"Format Protocol String"| Handler
+    Handler -->|"OK Transfer successful"| User
+```
+
 ---
 
 ## ⚡ Concurrency & Deadlock Prevention
