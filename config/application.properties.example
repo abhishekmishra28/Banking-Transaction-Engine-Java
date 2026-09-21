@@ -1,0 +1,21 @@
+# Banking Transaction Engine - Application Configuration
+# Copy this file to config/application.properties and adjust values
+
+# Server Configuration
+server.port=9090
+server.max-clients=50
+
+# Transaction Engine
+engine.workers=10
+engine.queue-capacity=1000
+
+# Database Configuration
+db.url=jdbc:sqlite:banking.db
+
+# Fraud Detection Thresholds
+fraud.large-transaction-threshold=10000.00
+fraud.velocity-window-seconds=3600
+fraud.velocity-max-transactions=20
+
+# Logging
+logging.level=INFO

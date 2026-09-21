@@ -2,83 +2,117 @@ package com.abhishek.banking.application.service;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
-
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import com.abhishek.banking.domain.exception.InsufficientFundsException;
+import com.abhishek.banking.domain.exception.InvalidAmountException;
 import com.abhishek.banking.domain.model.Account;
-import com.abhishek.banking.domain.model.AuditLog;
 import com.abhishek.banking.domain.model.SavingsAccount;
 import com.abhishek.banking.domain.model.Transaction;
+import com.abhishek.banking.domain.enums.TransactionStatus;
 import com.abhishek.banking.domain.value.Money;
-import com.abhishek.banking.repository.interfaces.AccountRepository;
-import com.abhishek.banking.repository.interfaces.AuditLogRepository;
-import com.abhishek.banking.repository.interfaces.TransactionRepository;
+import com.abhishek.banking.testutil.InMemoryRepositories;
 
 class TransactionServiceTest {
 
     private TransactionService transactionService;
     private AccountService accountService;
-    private InMemoryAccountRepository accountRepository;
-    private InMemoryTransactionRepository transactionRepository;
+    private InMemoryRepositories.InMemoryAccountRepository accountRepository;
+    private InMemoryRepositories.InMemoryTransactionRepository transactionRepository;
 
     @BeforeEach
     void setUp() {
-        accountRepository = new InMemoryAccountRepository();
-        transactionRepository = new InMemoryTransactionRepository();
-        AuditService auditService = new AuditService(new InMemoryAuditLogRepository());
-        
-        // Dummy CustomerService since we just bypass it for account creation in this test
-        accountService = new AccountService(accountRepository, null); 
-        
+        accountRepository = new InMemoryRepositories.InMemoryAccountRepository();
+        transactionRepository = new InMemoryRepositories.InMemoryTransactionRepository();
+        AuditService auditService = new AuditService(new InMemoryRepositories.InMemoryAuditLogRepository());
+
+        // CustomerService is null because we bypass it in these unit tests
+        accountService = new AccountService(accountRepository, null);
         transactionService = new TransactionService(transactionRepository, accountService, auditService);
     }
 
     @Test
-    void testDeposit_success() {
+    void testDeposit_success_increasesBalance() {
         Account acc = SavingsAccount.createNew("CUST-1", Money.ZERO);
         accountRepository.save(acc);
-        
-        transactionService.deposit(acc.getId(), Money.of("100.00"));
-        
+
+        Transaction tx = transactionService.deposit(acc.getId(), Money.of("100.00"));
+
+        assertEquals(TransactionStatus.COMPLETED, tx.getStatus());
         assertEquals(Money.of("100.00"), acc.getBalance());
-        assertEquals(1, transactionRepository.transactions.size());
+        assertEquals(1, transactionRepository.count());
     }
 
     @Test
-    void testTransfer_success() {
+    void testDeposit_negativeAmount_throwsAndRecordsFailure() {
+        Account acc = SavingsAccount.createNew("CUST-1", Money.of("100.00"));
+        accountRepository.save(acc);
+
+        assertThrows(InvalidAmountException.class,
+                () -> transactionService.deposit(acc.getId(), Money.of("-10.00")));
+    }
+
+    @Test
+    void testWithdraw_success_decreasesBalance() {
+        Account acc = SavingsAccount.createNew("CUST-1", Money.of("200.00"));
+        accountRepository.save(acc);
+
+        Transaction tx = transactionService.withdraw(acc.getId(), Money.of("50.00"));
+
+        assertEquals(TransactionStatus.COMPLETED, tx.getStatus());
+        assertEquals(Money.of("150.00"), acc.getBalance());
+    }
+
+    @Test
+    void testWithdraw_insufficientFunds_throwsAndPreservesBalance() {
+        Account acc = SavingsAccount.createNew("CUST-1", Money.of("50.00"));
+        accountRepository.save(acc);
+
+        assertThrows(InsufficientFundsException.class,
+                () -> transactionService.withdraw(acc.getId(), Money.of("100.00")));
+
+        // Balance must be unchanged
+        assertEquals(Money.of("50.00"), acc.getBalance());
+        // A FAILED transaction should still be recorded
+        assertEquals(1, transactionRepository.count());
+    }
+
+    @Test
+    void testTransfer_success_movesMoneyAtomically() {
         Account source = SavingsAccount.createNew("CUST-1", Money.of("500.00"));
-        Account dest = SavingsAccount.createNew("CUST-2", Money.ZERO);
+        Account dest   = SavingsAccount.createNew("CUST-2", Money.ZERO);
         accountRepository.save(source);
         accountRepository.save(dest);
-        
-        transactionService.transfer(source.getId(), dest.getId(), Money.of("200.00"));
-        
+
+        Transaction tx = transactionService.transfer(source.getId(), dest.getId(), Money.of("200.00"));
+
+        assertEquals(TransactionStatus.COMPLETED, tx.getStatus());
         assertEquals(Money.of("300.00"), source.getBalance());
         assertEquals(Money.of("200.00"), dest.getBalance());
     }
-    
-    // In-memory stubs
-    static class InMemoryAccountRepository implements AccountRepository {
-        Map<String, Account> db = new HashMap<>();
-        @Override public void save(Account account) { db.put(account.getId(), account); }
-        @Override public void update(Account account) { db.put(account.getId(), account); }
-        @Override public Optional<Account> findById(String id) { return Optional.ofNullable(db.get(id)); }
+
+    @Test
+    void testTransfer_sameAccount_throwsDomainError() {
+        Account acc = SavingsAccount.createNew("CUST-1", Money.of("500.00"));
+        accountRepository.save(acc);
+
+        assertThrows(com.abhishek.banking.domain.exception.BankingException.class,
+                () -> transactionService.transfer(acc.getId(), acc.getId(), Money.of("10.00")));
     }
-    
-    static class InMemoryTransactionRepository implements TransactionRepository {
-        Map<String, Transaction> transactions = new HashMap<>();
-        @Override public void save(Transaction transaction) { transactions.put(transaction.getId(), transaction); }
-        @Override public void update(Transaction transaction) { transactions.put(transaction.getId(), transaction); }
-        @Override public Optional<Transaction> findById(String id) { return Optional.ofNullable(transactions.get(id)); }
-        @Override public List<Transaction> findByAccountId(String accountId, int limit) { return List.of(); }
-    }
-    
-    static class InMemoryAuditLogRepository implements AuditLogRepository {
-        @Override public void save(AuditLog log) {}
+
+    @Test
+    void testTransfer_insufficientFunds_noPartialState() {
+        Account source = SavingsAccount.createNew("CUST-1", Money.of("10.00"));
+        Account dest   = SavingsAccount.createNew("CUST-2", Money.ZERO);
+        accountRepository.save(source);
+        accountRepository.save(dest);
+
+        assertThrows(InsufficientFundsException.class,
+                () -> transactionService.transfer(source.getId(), dest.getId(), Money.of("100.00")));
+
+        // Both balances must be unmodified
+        assertEquals(Money.of("10.00"), source.getBalance());
+        assertEquals(Money.ZERO, dest.getBalance());
     }
 }

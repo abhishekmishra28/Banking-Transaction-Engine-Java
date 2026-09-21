@@ -22,7 +22,7 @@ public class Transaction {
                        Money amount, Instant timestamp, TransactionStatus status, String failureReason) {
         if (id == null || id.isEmpty()) throw new IllegalArgumentException("Transaction ID required");
         if (type == null) throw new IllegalArgumentException("Transaction type required");
-        if (amount == null || !amount.isPositive()) throw new IllegalArgumentException("Transaction amount must be positive");
+        if (amount == null || !amount.isPositive()) throw new com.abhishek.banking.domain.exception.InvalidAmountException("Transaction amount must be positive");
         
         this.id = id;
         this.type = type;

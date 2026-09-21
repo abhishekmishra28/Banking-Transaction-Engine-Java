@@ -1,0 +1,7 @@
+target/
+*.db
+*.class
+*.jar
+*.log
+.DS_Store
+Thumbs.db

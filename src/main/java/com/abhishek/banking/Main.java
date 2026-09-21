@@ -1,7 +1,5 @@
 package com.abhishek.banking;
 
-import java.util.Scanner;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -18,63 +16,82 @@ import com.abhishek.banking.repository.sqlite.AuditLogRepositoryImpl;
 import com.abhishek.banking.repository.sqlite.CustomerRepositoryImpl;
 import com.abhishek.banking.repository.sqlite.TransactionRepositoryImpl;
 
+/**
+ * Entry point. Supports five run modes selected via the first CLI argument.
+ *
+ * <pre>
+ *   java -jar banking.jar demo        # in-memory demo (server on :9090)
+ *   java -jar banking.jar server      # persistent SQLite server on :9090
+ *   java -jar banking.jar benchmark   # JMH benchmark
+ * </pre>
+ */
 public class Main {
+
     private static final Logger logger = LoggerFactory.getLogger(Main.class);
 
     public static void main(String[] args) throws Exception {
         if (args.length == 0) {
-            System.out.println("Usage: java -jar banking-transaction-engine-java.jar <mode>");
-            System.out.println("Modes: in-memory-demo, db-demo, server, benchmark");
+            printUsage();
             return;
         }
 
         String mode = args[0].toLowerCase();
-        
         switch (mode) {
             case "server":
-                runServer();
+                logger.info("Starting Banking Server with SQLite persistence...");
+                runServer("jdbc:sqlite:banking.db");
                 break;
-            case "benchmark":
-                runBenchmark(args);
-                break;
+            case "demo":
             case "in-memory-demo":
-                System.out.println("In-memory demo not fully implemented as standalone. Run server with in-memory DB.");
+                logger.info("Starting Banking Server in IN-MEMORY mode...");
                 runServer("jdbc:sqlite::memory:");
                 break;
             case "db-demo":
-                System.out.println("DB demo. Run server with file DB.");
+                logger.info("Starting Banking Server in FILE-DB mode...");
                 runServer("jdbc:sqlite:banking.db");
                 break;
+            case "benchmark":
+                logger.info("Starting JMH Benchmark...");
+                BankingBenchmark.main(args);
+                break;
             default:
-                System.out.println("Unknown mode: " + mode);
+                System.err.println("Unknown mode: " + mode);
+                printUsage();
         }
     }
-    
-    private static void runServer() {
-        runServer("jdbc:sqlite:banking.db"); // default to file db
+
+    private static void printUsage() {
+        System.out.println("Banking Transaction Engine v1.0.0");
+        System.out.println();
+        System.out.println("Usage: java -jar banking-transaction-engine-java-1.0.0.jar <mode>");
+        System.out.println();
+        System.out.println("Modes:");
+        System.out.println("  server        Start TCP server with SQLite persistence (port 9090)");
+        System.out.println("  demo          Start TCP server with in-memory SQLite");
+        System.out.println("  benchmark     Run JMH throughput benchmarks");
     }
 
     private static void runServer(String jdbcUrl) {
         DatabaseConnectionManager dbManager = new DatabaseConnectionManager(jdbcUrl);
         dbManager.initializeSchema();
-        
+
         CustomerService customerService = new CustomerService(new CustomerRepositoryImpl(dbManager));
         AccountService accountService = new AccountService(new AccountRepositoryImpl(dbManager), customerService);
         AuditService auditService = new AuditService(new AuditLogRepositoryImpl(dbManager));
-        TransactionService transactionService = new TransactionService(new TransactionRepositoryImpl(dbManager), accountService, auditService);
-        
+        TransactionService transactionService = new TransactionService(
+                new TransactionRepositoryImpl(dbManager), accountService, auditService);
+
         TransactionEngine engine = new TransactionEngine(10, 1000);
         BankingServer server = new BankingServer(9090, 50, customerService, accountService, transactionService, engine);
-        
-        server.start();
-        
+
+        // Shutdown hook for graceful termination (Ctrl+C)
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            logger.info("Shutdown signal received...");
             server.stop();
             engine.shutdown();
-        }));
-    }
-    
-    private static void runBenchmark(String[] args) throws Exception {
-        BankingBenchmark.main(args);
+        }, "shutdown-hook"));
+
+        logger.info("Banking Server ready. Connect with: telnet localhost 9090");
+        server.start();
     }
 }
